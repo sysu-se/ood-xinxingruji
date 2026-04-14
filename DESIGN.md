@@ -1,198 +1,106 @@
-# DESIGN.md
 
-## 1. Sudoku / Game 的职责边界
+# 设计文档（DESIGN.md）
 
-### Sudoku（棋盘）
-`Sudoku` 是数独核心领域对象，专注于**数独棋盘本身的数据与操作**，不感知游戏会话、历史记录等上层逻辑。核心职责：
-- 持有数独棋盘的底层数据（9x9 二维数组 `grid`），对外通过 `getGrid()` 暴露只读视图；
-- 提供 `guess(move)` 方法，执行单元格数值的设置操作（修改 `grid`）；
-- 实现棋盘的深拷贝（`clone()`），保证不同棋盘实例的数据隔离；
-- 提供棋盘校验能力（可选，如检查行/列/宫是否重复）；
-- 负责自身的序列化（`toJSON()`）、反序列化（`createSudokuFromJSON`）；
-- 提供外表化表示（`toString()`），用于调试查看棋盘状态。
+## 一、领域对象设计与改进
 
-### Game（游戏会话）
-`Game` 是 UI 层与 `Sudoku` 之间的桥梁，专注于**游戏会话的生命周期与交互逻辑**。核心职责：
-- 持有当前活跃的 `Sudoku` 实例，对外通过 `getSudoku()` 暴露；
-- 管理 Undo/Redo 历史（维护 `undoStack` 和 `redoStack` 两个栈）；
-- 转发 UI 层的 `guess` 操作到 `Sudoku`，并记录操作到历史栈；
-- 实现 `undo()`/`redo()` 方法，修改当前 `Sudoku` 状态并维护历史栈；
-- 提供 `canUndo()`/`canRedo()` 方法，供 UI 层判断按钮状态；
-- 处理游戏重置逻辑（清空历史栈，替换新的 `Sudoku`）；
-- 负责自身的序列化（`toJSON()`）、反序列化（`createGameFromJSON`）；
-- 隔离 UI 层与 `Sudoku` 的耦合，UI 仅需调用 `Game` 的接口，无需感知 `Sudoku` 内部实现。
+### 1. Sudoku
+Sudoku 负责数独棋盘的全部核心数据与规则校验：
+- 持有 9x9 棋盘数据（#board）和初始题面（#original），均为深拷贝，防止外部污染。
+- 提供 `guess(row, col, value)` 方法，支持位置/对象两种参数，自动校验输入、不可修改初始数字、自动检测行/列/宫冲突。
+- 支持 `clone()` 深拷贝，确保每个实例数据隔离。
+- 提供 `toJSON()`/`fromJSON()`，实现序列化/反序列化，便于存档与恢复。
+- `isComplete()`/`isValid()` 用于判断棋盘完成与合法性。
+- `toString()` 便于调试输出棋盘。
 
-## 2. Move 是值对象还是实体对象？为什么？
+#### 改进点：
+- 明确分离棋盘数据与初始题面，防止误操作。
+- 所有数据操作均防御性深拷贝，Undo/Redo 绝不串数据。
+- 业务校验逻辑内聚，UI 层无需关心数独规则。
 
-`Move` 是**值对象（Value Object）**，理由如下：
-1. **无唯一身份标识**：`Move` 仅包含 `row`（行）、`col`（列）、`value`（数值）三个原始类型属性，其“身份”完全由属性值决定（例如 `{row:0, col:0, value:1}` 与另一个属性完全相同的 `Move` 是等价的）；
-2. **不可变**：在实现中，`Move` 的属性被设计为只读，创建后不允许修改，符合值对象“不可变”的特征；
-3. **无业务行为**：`Move` 仅用于承载“一次单元格输入操作”的数据，不包含任何业务逻辑（如校验、修改棋盘），仅作为数据载体，而非有行为的实体对象；
-4. **相等性基于属性**：判断两个 `Move` 是否相等，只需比较 `row`/`col`/`value` 是否一致，而非比较引用或唯一 ID。
+### 2. Game
+Game 负责游戏会话、历史管理与 UI 交互：
+- 持有当前 Sudoku 实例，所有操作都通过 Game 间接完成。
+- 维护 `#history`（Undo 栈）和 `#future`（Redo 栈），每步操作前后均深拷贝，保证历史隔离。
+- 提供 `guess(row, col, value)`，自动存历史、清 redo、转发到 Sudoku。
+- `undo()`/`redo()` 操作严格切换棋盘快照，支持多步撤销重做。
+- `canUndo()`/`canRedo()` 便于 UI 判断按钮状态。
+- `toJSON()`/`fromJSON()` 支持完整存档与恢复。
+- `getGrid()`/`isWon()`/`isValid()` 等接口为 UI 提供便利。
 
-## 3. history 中存储的是什么？为什么？
+#### 改进点：
+- 历史存储采用棋盘快照（深拷贝 Sudoku），保证任意撤销/重做后状态绝对一致。
+- UI 只需操作 Game，无需感知底层棋盘细节。
 
-### 存储内容
-历史记录分为两个栈：
-- `undoStack`：存储用户已执行的**有效 Move 对象**（即成功修改棋盘的每一次输入操作）；
-- `redoStack`：存储被 `undo()` 撤销的 Move 对象，用于 `redo()` 恢复操作。
+## 二、Svelte 响应式集成方案
 
-### 选择存储 Move 的原因
-1. **内存效率高**：Move 仅包含 3 个原始类型属性，占用内存远小于存储整个 Sudoku 快照（9x9 二维数组）；
-2. **操作可逆性**：数独的 `guess` 操作是“设置单元格值”，undo 时只需记录该单元格的“旧值”，或通过反向操作（重新设置旧值）恢复，而 Move 已包含“位置+新值”，结合当前棋盘可推导旧值；
-3. **逻辑简洁**：存储 Move 无需频繁深拷贝 Sudoku 实例，降低代码复杂度，且便于理解（历史栈直接对应用户的每一次操作）；
-4. **符合业务语义**：用户感知的“历史”是“每一次输入操作”，而非“棋盘快照”，存储 Move 更贴合用户的操作认知。
+### 1. 响应式 store 设计
+项目采用 Svelte 3 响应式机制，核心思路：
+- 领域对象（Game/Sudoku）作为 store 的核心状态，所有 UI 变更均通过 store 触发。
+- 通过 Svelte 的 `$store` 语法，UI 组件自动订阅 Game/Sudoku 状态。
+- 领域对象变更（如 guess/undo/redo）后，store 触发 set，Svelte 自动刷新界面。
 
-### 对比“存储快照”的取舍
-若存储 Sudoku 快照，优点是 undo/redo 时无需推导旧值，直接替换当前 Sudoku 即可；但缺点是内存开销大（每次操作都要深拷贝 9x9 数组），且快照无法体现“用户操作”的语义，仅体现“棋盘状态”。本次设计选择 Move，是权衡“内存效率”和“逻辑简洁性”后的最优解。
+### 2. 典型流程
+1. **开始新游戏**：创建 Game/Sudoku 实例，赋值到 store，UI 自动渲染新棋盘。
+2. **界面渲染**：Board 组件通过 `$userGrid` 等 store 变量，直接消费 Game/Sudoku 导出的棋盘数据。
+3. **用户输入**：点击单元格、输入数字时，调用 Game 的 guess 方法，store 自动更新。
+4. **Undo/Redo**：UI 按钮调用 Game 的 undo/redo，store 更新，界面自动刷新。
+5. **自动刷新**：所有领域对象变更均通过 store 触发，Svelte 响应式机制保证 UI 实时同步。
 
-## 4. 复制策略是什么？哪些地方需要深拷贝？
+### 3. 关键代码片段（伪代码）
+```js
+// store/game.js
+import { writable } from 'svelte/store';
+import { createGame } from '../domain';
+export const game = writable(createGame({ sudoku: ... }));
 
-### 核心复制策略
-- **值类型（原始类型/值对象）**：使用浅拷贝（赋值），因为无引用类型属性，浅拷贝即可保证数据隔离；
-- **引用类型（如 Sudoku 的 grid 二维数组）**：使用深拷贝，避免多个实例共享同一引用导致的数据篡改。
-
-### 必须深拷贝的场景
-1. **Sudoku.clone() 方法**：
-   - 原因：`Sudoku` 的核心数据是 `grid`（9x9 二维数组，引用类型），若浅拷贝，多个 Sudoku 实例会共享同一个 `grid` 数组，修改其中一个实例的 `grid` 会导致其他实例的 `grid` 同步变化，破坏数据隔离；
-   - 实现：递归拷贝二维数组（`grid.map(row => [...row])`），生成全新的 9x9 数组。
-
-2. **序列化时的 grid 拷贝**：
-   - 原因：`Sudoku.toJSON()` 需返回 `grid` 的深拷贝，避免外部修改返回的数组后影响 Sudoku 内部的 `grid`；
-   - 实现：同 `clone()`，返回深拷贝后的 `grid` 数组。
-
-### 浅拷贝安全的场景
-1. **Move 对象的拷贝**：
-   - 原因：Move 的属性均为原始类型（number），浅拷贝（如 `{...move}`）即可生成新对象，且属性无引用，不会导致数据共享；
-2. **历史栈中 Move 的存储**：
-   - 原因：Move 是不可变值对象，存储其引用即可，无需拷贝（或浅拷贝），因为属性不会被修改。
-
-### 误用浅拷贝的后果
-1. **Sudoku 实例数据污染**：若 `Sudoku.clone()` 用浅拷贝，多个 Sudoku 实例共享 `grid`，undo/redo 时修改一个实例的 `grid` 会导致历史快照的 `grid` 同步变化，Undo/Redo 逻辑完全失效；
-2. **序列化数据篡改**：若 `toJSON()` 返回 `grid` 的浅拷贝，外部代码修改返回的数组后，会直接改变 Sudoku 内部的 `grid`，导致棋盘状态异常；
-3. **历史栈数据混乱**：若 Move 包含引用类型属性且浅拷贝，修改一个 Move 的属性会导致历史栈中所有相同引用的 Move 同步变化，破坏 Undo/Redo 逻辑。
-
-## 5. 序列化 / 反序列化设计
-
-### 核心原则
-序列化仅保留“可恢复游戏状态的核心数据”，不保留临时状态（如 UI 相关、方法引用等）；反序列化时通过工厂函数重建对象，保证数据隔离。
-
-### Sudoku 的序列化/反序列化
-#### 序列化（toJSON()）
-- **序列化字段**：`grid`（9x9 二维数组）—— 数独棋盘的核心数据，是恢复棋盘的唯一依据；
-- **不序列化字段**：无（Sudoku 仅持有 `grid`，无其他状态）；
-- 输出格式：
-  ```json
-  { "grid": [[1,0,0,...], [0,2,0,...], ...] }
-  ```
-
-#### 反序列化（createSudokuFromJSON(json)）
-1. 校验 JSON 格式：确保 `grid` 是 9x9 二维数组，且每个元素为 0-9 的数字；
-2. 深拷贝 `json.grid` 生成新的 `grid` 数组（避免外部引用污染）；
-3. 创建新的 Sudoku 实例，将深拷贝后的 `grid` 赋值给实例；
-4. 返回新的 Sudoku 实例。
-
-### Game 的序列化/反序列化
-#### 序列化（toJSON()）
-- **序列化字段**：
-  - `currentSudoku`：当前 Sudoku 实例的 JSON（调用 `sudoku.toJSON()`）；
-  - `undoStack`：Undo 栈中的 Move 数组（浅拷贝，因为 Move 是值对象）；
-  - `redoStack`：Redo 栈中的 Move 数组（浅拷贝）；
-- **不序列化字段**：无（Game 的核心状态仅包含上述三个）；
-- 输出格式：
-  ```json
-  {
-    "currentSudoku": { "grid": [[1,0,0,...], ...] },
-    "undoStack": [{ "row": 0, "col": 0, "value": 1 }, ...],
-    "redoStack": []
-  }
-  ```
-
-#### 反序列化（createGameFromJSON(json)）
-1. 解析 `json.currentSudoku`，调用 `createSudokuFromJSON` 重建 Sudoku 实例；
-2. 解析 `json.undoStack`/`json.redoStack`，将每个对象转换为 Move 实例（校验 `row`/`col`/`value` 合法性）；
-3. 创建新的 Game 实例，赋值 `currentSudoku`、`undoStack`、`redoStack`；
-4. 返回新的 Game 实例。
-
-### 关键保障
-- 反序列化时所有引用类型（如 `grid`）均做深拷贝，确保反序列化后的对象与原对象无引用共享；
-- 严格校验 JSON 格式，避免非法数据导致对象状态异常。
-
-## 6. 外表化接口是什么？为什么这样设计？
-
-### 核心外表化接口
-#### 1. Sudoku.toString()
-- 设计：格式化输出 9x9 棋盘，每行数字用空格分隔，空单元格（值为 0）用 `.` 表示，行之间换行，宫之间用横线/竖线分隔（增强可读性）；
-- 示例输出：
-  ```
-  1 . . | 4 . 5 | . . 9
-  . 2 . | . . . | 7 . .
-  . . 3 | . . . | . 8 .
-  ------+-------+------
-  . . . | 9 . 8 | . . .
-  5 . . | . 7 . | . . 6
-  . . . | 3 . 2 | . . .
-  ------+-------+------
-  . 9 . | . . . | 8 . .
-  . . 8 | . . . | . 7 .
-  7 . . | 2 . 1 | . . 3
-  ```
-- 设计理由：
-  - 符合数独的视觉习惯（9x9 分宫展示），便于调试时快速定位单元格位置；
-  - 用 `.` 代替 0，更直观区分空单元格和有值单元格；
-  - 输出文本可直接打印，无需额外解析，调试效率高。
-
-#### 2. Sudoku.toJSON()
-- 设计：返回包含 `grid` 的纯 JSON 对象（如 `{ grid: [[1,0,...], ...] }`）；
-- 设计理由：
-  - 满足序列化要求，同时作为机器可读的外表化表示；
-  - 结构简单，便于调试时快速查看棋盘的原始数据；
-  - 与 `createSudokuFromJSON` 形成闭环，保证序列化/反序列化的一致性。
-
-#### 3. Game.toString()（可选扩展）
-- 设计：输出当前游戏状态，包含棋盘快照 + Undo/Redo 栈长度；
-- 示例输出：
-  ```
-  Current Sudoku:
-  1 . . | 4 . 5 | . . 9
-  . 2 . | . . . | 7 . .
-  ...
-  Undo Stack: 3 moves
-  Redo Stack: 1 move
-  ```
-- 设计理由：
-  - 整合“棋盘状态”和“历史栈状态”，便于调试时查看游戏整体会话；
-  - 突出核心信息（栈长度），快速判断 Undo/Redo 可用性。
-
-### 设计原则
-- **调试友好**：输出内容能直接反映对象核心状态，无需额外处理；
-- **语义清晰**：贴合数独的业务场景（如分宫展示），符合开发者的认知习惯；
-- **多格式覆盖**：同时提供人类可读（toString）和机器可读（toJSON）的表示，满足不同调试需求；
-- **避免默认值**：杜绝 `[object Object]` 这类无意义输出，保证信息的完整性。
-
-## 补充：深浅拷贝的额外说明
-
-### 历史栈中为何无需深拷贝 Move？
-Move 是值对象，属性均为原始类型，浅拷贝（或直接存储引用）即可保证数据隔离——因为 Move 不可变，即使存储引用，外部也无法修改其属性，因此不会出现“一个 Move 被多处修改”的问题。
-
-### Sudoku 深拷贝的实现细节
-```javascript
-// Sudoku.clone() 实现
-clone() {
-  // 深拷贝二维数组：先拷贝每一行（浅拷贝行数组），再整体拷贝外层数组
-  const newGrid = this.grid.map(row => [...row]);
-  return createSudoku(newGrid);
-}
+// Board.svelte
+import { game } from '../stores/game';
+// 通过 $game.getGrid() 获取当前棋盘
 ```
-该实现保证了新 Sudoku 实例的 `grid` 与原实例完全隔离，修改新实例的 `grid` 不会影响原实例。
 
-### 浅拷贝误用的典型场景
-若在 `Sudoku.clone()` 中使用浅拷贝：
-```javascript
-// 错误示例：浅拷贝
-clone() {
-  const newGrid = this.grid; // 仅拷贝引用
-  return createSudoku(newGrid);
-}
+## 三、UI 层如何消费领域对象
+
+- Board 组件通过 store 订阅 Game/Sudoku，渲染棋盘。
+- 用户操作（输入、撤销、重做）均调用 Game 的接口，绝不直接操作数组。
+- UI 只需关心 Game/Sudoku 的接口与状态，无需关心其内部实现。
+- 领域对象变更后，Svelte store 自动触发 UI 刷新。
+
+## 四、Undo/Redo、序列化与外表化
+
+### 1. Undo/Redo
+- Game 内部维护历史栈，所有操作前后均深拷贝 Sudoku，保证撤销/重做绝对安全。
+- UI 只需调用 game.undo()/game.redo()，无需关心历史细节。
+
+### 2. 序列化/反序列化
+- Sudoku/Game 均实现 toJSON/fromJSON，支持完整存档与恢复。
+- 所有引用类型均深拷贝，防止外部污染。
+
+### 3. 外表化接口
+- Sudoku.toString() 便于调试输出棋盘。
+- Sudoku.toJSON() 便于存档与数据传输。
+
+## 五、设计亮点与合理性说明
+
+- 领域对象与 UI 解耦，所有业务逻辑内聚于 Sudoku/Game，UI 只需消费接口。
+- Svelte 响应式机制与领域对象无缝集成，保证界面与数据一致性。
+- Undo/Redo、序列化、外表化等机制均有严格数据隔离，防止状态串改。
+- 设计充分考虑可维护性、可扩展性与调试便利。
+
+## 六、附：关键接口示例
+
+```js
+// Sudoku
+guess(row, col, value)
+clone()
+toJSON()/fromJSON()
+isComplete()/isValid()
+toString()
+
+// Game
+guess(row, col, value)
+undo()/redo()
+canUndo()/canRedo()
+getGrid()
+toJSON()/fromJSON()
+reset(newSudoku)
 ```
-此时，克隆后的 Sudoku 实例与原实例共享 `grid`，当执行 `undo()` 时，修改克隆实例的 `grid` 会直接改变原实例的 `grid`，导致历史记录中的棋盘状态被篡改，Undo/Redo 逻辑完全失效。
