@@ -1,8 +1,8 @@
-# oo-xinxingruji - Review
+# con-oo-xinxingruji-2 - Review
 
 ## Review 结论
 
-整体上已经把棋盘与游戏会话拆成了两个领域对象，撤销/重做、序列化和外表化接口也都有雏形；但当前实现存在一个会直接破坏历史快照语义的核心缺陷，并且数独业务规则与序列化边界建模偏弱，因此整体设计质量只能评为中等偏下。
+领域层有一定封装基础，但当前提交并未把 Game/Sudoku 接入真实 Svelte 游戏主流程；真实开局、渲染、输入、胜负判断、撤销重做仍由旧 stores 驱动，因此按作业要求应判为未完成关键接入，OOD 也因双状态源而明显受损。
 
 ## 总体评价
 
@@ -11,58 +11,83 @@
 | OOP | fair |
 | JS Convention | fair |
 | Sudoku Business | poor |
-| OOD | fair |
+| OOD | poor |
 
 ## 缺点
 
-### 1. clone() 丢失 original 题面，导致历史快照语义错误
+### 1. 真实游戏主流程没有接入 Game/Sudoku
 
 - 严重程度：core
-- 位置：src/domain/Sudoku.js:49-52, src/domain/Game.js:13,21,27,43,56,75-78
-- 原因：clone() 只用当前 #board 构造新实例，而构造函数会把传入棋盘同时写入 #board 和 #original。这样一来，用户已经填入的值在克隆后会被当成“初始题目”。Game 又把 clone() 用在当前局面、history、future 和 getSudoku() 上，所以一旦发生撤销/重做或取出快照，之前的用户输入可能被永久锁死，后续继续猜数会违反预期。
+- 位置：src/components/Modal/Types/Welcome.svelte:16-23; src/node_modules/@sudoku/game.js:13-33; src/components/Board/index.svelte:40-51
+- 原因：开局仍通过 grid.generate/grid.decodeSencode 创建旧 store 状态，棋盘渲染也直接消费 $userGrid/$grid。静态检索 src 未发现 UI 对 src/domain 的导入，因此领域对象没有成为单一事实来源，不满足作业最关键的真实接入要求。
 
-### 2. Sudoku 领域对象几乎没有表达数独规则
+### 2. 用户输入直接修改二维数组，绕过领域操作入口
+
+- 严重程度：core
+- 位置：src/components/Controls/Keyboard.svelte:10-25; src/node_modules/@sudoku/stores/grid.js:73-87
+- 原因：键盘输入直接调用 userGrid.set/applyHint 改写数组，没有经过 Game.guess 或 Sudoku 接口。这样规则校验、历史管理、序列化边界都被拆散到 store/组件中，违背了由对象维护自身状态演进的 OOP/OOD 原则。
+
+### 3. Undo/Redo 没有接入 UI 流程
+
+- 严重程度：core
+- 位置：src/components/Controls/ActionBar/Actions.svelte:26-35; src/domain/Game.js:38-70
+- 原因：领域层实现了 undo/redo/canUndo/canRedo，但操作栏两个按钮没有任何 on:click，也没有绑定可用状态，真实界面无法调用领域对象历史逻辑。这直接缺失了作业要求中的关键流程。
+
+### 4. 失败的 guess 会污染历史栈
 
 - 严重程度：major
-- 位置：src/domain/Sudoku.js:24-41
-- 原因：guess() 只检查坐标范围、0-9 和“初始数字不可改”，没有任何行、列、九宫格冲突校验，也没有提供合法性或完成态判断接口。结果是对象更像一个 9x9 数组包装器，而不是一个真正承载数独业务规则的领域模型。
+- 位置：src/domain/Game.js:25-33; src/domain/Sudoku.js:84-107
+- 原因：Game.guess 先把当前状态压入 history，再调用 Sudoku.guess；而 Sudoku.guess 会因越界、修改题目、冲突等抛错。静态推导可知，一旦 guess 失败，棋盘未变但 history 已新增快照，undo/redo 状态机会失真。
 
-### 3. toJSON() 暴露了内部可变引用，序列化结果不是稳定快照
-
-- 严重程度：major
-- 位置：src/domain/Sudoku.js:55-57, src/domain/Game.js:83-88
-- 原因：Sudoku.toJSON() 直接返回内部 #board 和 #original 的数组引用，调用方拿到对象后仍可修改这些数组，从而反向污染领域对象内部状态。Game.toJSON() 又复用了这一实现，使历史记录和当前局面的序列化边界都不够安全，不符合封装与序列化应返回纯数据快照的惯例。
-
-### 4. 输入校验过弱，允许无效数据进入领域层
+### 5. 领域规则与当前数独交互模型不一致
 
 - 严重程度：major
-- 位置：src/domain/Sudoku.js:7-16,24-36,60-63
-- 原因：构造函数只校验了 9x9 形状，没有校验单元格是否为整数、是否在允许范围内；guess() 对 value 的判断也会放过 NaN、字符串、浮点数等非预期输入；fromJSON() 直接信任反序列化数据。领域对象作为边界层时，这会让非法状态轻易渗入系统。
+- 位置：src/domain/Sudoku.js:97-112; src/components/Board/index.svelte:49-51; src/node_modules/@sudoku/stores/game.js:7-19
+- 原因：Sudoku.guess 把出现冲突定义为异常并拒绝写入；但现有界面通过 invalidCells 高亮冲突，并以可录入但未获胜表达中间错误状态。这说明领域模型没有贴合当前游戏业务，若后续强行接入会与现有 UI 语义冲突。
+
+### 6. 存在并行状态模型，职责边界重复
+
+- 严重程度：major
+- 位置：src/node_modules/@sudoku/stores/grid.js:44-91; src/domain/Game.js:100-130
+- 原因：grid/userGrid 负责棋盘与提示写入，Game 同时又定义了 getGrid/reset/clearHistory 等 UI 便利接口，但两者没有关联。结果是同一业务概念在 store 与领域对象中重复建模，缺少单一事实来源，后续很难维护。
+
+### 7. 冲突检测辅助方法的语义不够自洽
+
+- 严重程度：minor
+- 位置：src/domain/Sudoku.js:50-57; src/domain/Sudoku.js:60-71; src/domain/Sudoku.js:97-112
+- 原因：注释写的是除了目标位置，实现却没有排除目标格；因此对已有用户数字重复填写同一个值也会报冲突。这个 API 行为并不直观，说明规则方法仍偏向为测试凑接口，而不是稳定的领域语义。
+
+### 8. Svelte store 通过原地 mutate 返回同一引用，可工作但不够稳妥
+
+- 严重程度：minor
+- 位置：src/node_modules/@sudoku/stores/grid.js:73-87; src/node_modules/@sudoku/stores/candidates.js:10-25
+- 原因：update 回调里直接改数组或对象再返回原引用，Svelte 当前实现通常仍会通知订阅者，但这种写法不利于推理，也削弱了和领域对象、快照式历史的配合。对 JS 与 Svelte 代码习惯而言不够稳健。
 
 ## 优点
 
-### 1. Game 基本承担了会话与历史管理职责
+### 1. Sudoku 封装了输入校验与防御性拷贝
 
-- 位置：src/domain/Game.js:9-17,24-61
-- 原因：当前设计没有把撤销/重做逻辑散落到 UI；Game 持有当前 Sudoku，并集中管理 history 和 future，整体职责边界方向是对的。
+- 位置：src/domain/Sudoku.js:7-42
+- 原因：构造函数同时校验 9x9 结构、数值范围，并复制 board/original，避免外部直接破坏内部状态；这体现了基本的封装意识。
 
-### 2. Undo/Redo 双栈协议写法清晰
+### 2. 历史与序列化职责集中在 Game
 
-- 位置：src/domain/Game.js:25-31,37-60
-- 原因：新输入前先保存历史、产生新输入后清空 future、undo/redo 之间转移当前快照，这套状态机结构符合常见撤销/重做模型，也契合作业要求。
+- 位置：src/domain/Game.js:9-97
+- 原因：undo/redo、clone、toJSON/fromJSON 都收敛在 Game，而不是散落到组件事件中，领域层边界本身是清晰的。
 
-### 3. 对棋盘状态做了私有化与基础防御性拷贝
+### 3. 现有 Svelte 视图链路具备响应式渲染基础
 
-- 位置：src/domain/Sudoku.js:2-16,44-47
-- 原因：使用私有字段保存内部状态，并在构造和 getGrid() 时复制二维数组，说明作者有意识地避免外部直接共享引用。
+- 位置：src/components/Board/index.svelte:40-51; src/node_modules/@sudoku/stores/grid.js:93-137; src/node_modules/@sudoku/stores/game.js:7-19
+- 原因：棋盘渲染、冲突高亮和胜利判定都建立在 store/derived 之上，而不是手写 DOM 同步；如果后续换成 domain adapter，这条响应式消费链是可以复用的。
 
-### 4. 提供了可读的文本外表化
+### 4. 领域导出面向构建和反序列化较完整
 
-- 位置：src/domain/Sudoku.js:66-70
-- 原因：toString() 返回按行排布的棋盘文本，至少能用于调试查看局面，满足外表化的基本要求。
+- 位置：src/domain/index.js:8-22
+- 原因：同时提供类导出和 create/fromJSON 工厂，便于测试、持久化和后续做 Svelte store adapter。
 
 ## 补充说明
 
-- 本次结论仅基于对 src/domain/* 的静态阅读，未运行测试，也未验证与 UI 或调用方联调后的实际行为。
-- 关于 Undo/Redo、序列化污染、可继续猜数等判断，均来自对 clone()、toJSON()、guess() 调用链的静态推演，而非实际执行结果。
-- 按你的要求，本次未扩展审查 src/domain 以外目录，因此对“新开一局”这类跨层流程只评价领域层当前暴露出的设计能力。
+- 本次结论仅基于静态阅读，未运行测试，也未实际操作界面验证行为。
+- 审查范围限制在 src/domain/* 及其关联的 Svelte 接入代码，主要查看了 App、Board、Controls、Welcome，以及 @sudoku 的 game/grid/game/keyboard store。
+- 领域对象未接入 Svelte 主流程的判断来自静态检索和代码阅读：在 src 中未发现真实 UI 对 src/domain 下 Game/Sudoku 的导入与调用。
+- 关于 history 污染、规则冲突等问题均是基于控制流推演得出的静态结论，而非运行时观测。
