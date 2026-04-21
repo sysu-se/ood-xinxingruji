@@ -21,15 +21,27 @@ export class Game {
     return this.#sudoku.clone();
   }
 
-  // ========== 核心修复：guess 方法先存历史，再修改棋盘 ==========
+  // ========== 核心修复：guess 方法先验证再执行，保证历史栈一致性 ==========
   guess(row, col, value) {
-    // 1. 【关键】先把操作前的当前状态，深拷贝存入历史栈
+    // 1. 【关键】先用副本验证规则是否满足
+    const clonedSudoku = this.#sudoku.clone();
+    try {
+      clonedSudoku.guess(row, col, value);
+    } catch (e) {
+      // 验证失败，不改任何状态，直接抛错（历史栈保持不变）
+      throw e;
+    }
+
+    // 2. 验证通过后，才把当前状态压入历史栈
     this.#history.push(this.#sudoku.clone());
-    // 2. 执行猜数操作（直接修改当前 #sudoku 实例，适配 Sudoku 类的行为）
+    
+    // 3. 执行实际的猜数操作
     this.#sudoku.guess(row, col, value);
-    // 3. 新操作后，清空 redo 历史（不可再重做之前的操作）
+    
+    // 4. 新操作后，清空 redo 历史
     this.#future = [];
-    // 4. 支持链式调用
+    
+    // 5. 支持链式调用
     return this;
   }
   // ==============================================================

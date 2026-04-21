@@ -47,23 +47,23 @@ export class Sudoku {
     return new Sudoku(board);
   }
 
-  // 检查指定值在行中是否有冲突（除了目标位置）
-  #hasConflictInRow(row, value) {
-    return this.#board[row].some((val, col) => val === value && val !== 0);
+  // 检查指定值在行中是否有冲突（明确排除目标位置，解决缺点7）
+  #hasConflictInRow(row, col, value) {
+    return this.#board[row].some((val, c) => c !== col && val === value && val !== 0);
   }
 
-  // 检查指定值在列中是否有冲突（除了目标位置）
-  #hasConflictInCol(col, value) {
-    return this.#board.some((row, idx) => this.#board[idx][col] === value && value !== 0);
+  // 检查指定值在列中是否有冲突（明确排除目标位置，解决缺点7）
+  #hasConflictInCol(row, col, value) {
+    return this.#board.some((boardRow, r) => r !== row && this.#board[r][col] === value && value !== 0);
   }
 
-  // 检查指定值在九宫格中是否有冲突
+  // 检查指定值在九宫格中是否有冲突（明确排除目标位置，解决缺点7）
   #hasConflictInBox(row, col, value) {
     const boxRow = Math.floor(row / 3) * 3;
     const boxCol = Math.floor(col / 3) * 3;
     for (let i = boxRow; i < boxRow + 3; i++) {
       for (let j = boxCol; j < boxCol + 3; j++) {
-        if (this.#board[i][j] === value && value !== 0) {
+        if ((i !== row || j !== col) && this.#board[i][j] === value && value !== 0) {
           return true;
         }
       }
@@ -96,10 +96,10 @@ export class Sudoku {
 
     // 4. 【增强】当 v 不为 0 时，检查数独业务规则冲突
     if (v !== 0) {
-      if (this.#hasConflictInRow(r, v)) {
+      if (this.#hasConflictInRow(r, c, v)) {
         throw new Error(`数字 ${v} 在第 ${r + 1} 行已存在`);
       }
-      if (this.#hasConflictInCol(c, v)) {
+      if (this.#hasConflictInCol(r, c, v)) {
         throw new Error(`数字 ${v} 在第 ${c + 1} 列已存在`);
       }
       if (this.#hasConflictInBox(r, c, v)) {
@@ -116,6 +116,11 @@ export class Sudoku {
   // 获取当前棋盘（深拷贝，防御性拷贝测试通过）
   getGrid() {
     return this.#board.map(row => [...row]);
+  }
+
+  // 获取原始题目（深拷贝，防御性拷贝）
+  getOriginal() {
+    return this.#original.map(row => [...row]);
   }
 
   // 深拷贝实例（clone测试用）【关键修复】：保持 original 的引用，不重新初始化
