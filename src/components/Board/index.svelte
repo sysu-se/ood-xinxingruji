@@ -5,7 +5,6 @@
 	import { settings } from '@sudoku/stores/settings';
 	import { cursor } from '@sudoku/stores/cursor';
 	import { candidates } from '@sudoku/stores/candidates';
-	import { currentGrid, originalGrid } from '../../stores/gameInstance.js';
 	import Cell from './Cell.svelte';
 
 	function isSelected(cursorStore, x, y) {
@@ -28,10 +27,6 @@
 
 		return gridStore[cursorStore.y][cursorStore.x];
 	}
-
-	// 解决缺点1、6：优先使用领域对象的状态，回退到旧的 stores
-	$: displayGrid = $currentGrid || $userGrid;
-	$: displayOriginal = $originalGrid || $grid;
 </script>
 
 <div class="board-padding relative z-10">
@@ -42,7 +37,7 @@
 
 		<div class="bg-white shadow-2xl rounded-xl overflow-hidden w-full h-full max-w-xl grid" class:bg-gray-200={$gamePaused}>
 
-			{#each displayGrid as row, y}
+			{#each $userGrid as row, y}
 				{#each row as value, x}
 					<Cell {value}
 					      cellY={y + 1}
@@ -50,10 +45,10 @@
 					      candidates={$candidates[x + ',' + y]}
 					      disabled={$gamePaused}
 					      selected={isSelected($cursor, x, y)}
-					      userNumber={displayOriginal[y][x] === 0}
+					      userNumber={$grid[y][x] === 0}
 					      sameArea={$settings.highlightCells && !isSelected($cursor, x, y) && isSameArea($cursor, x, y)}
-					      sameNumber={$settings.highlightSame && value && !isSelected($cursor, x, y) && getValueAtCursor(displayGrid, $cursor) === value}
-					      conflictingNumber={$settings.highlightConflicting && displayOriginal[y][x] === 0 && $invalidCells.includes(x + ',' + y)} />
+					      sameNumber={$settings.highlightSame && value && !isSelected($cursor, x, y) && getValueAtCursor($userGrid, $cursor) === value}
+					      conflictingNumber={$settings.highlightConflicting && $grid[y][x] === 0 && $invalidCells.includes(x + ',' + y)} />
 				{/each}
 			{/each}
 

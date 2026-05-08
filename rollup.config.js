@@ -33,6 +33,9 @@ export default {
 		name:      'app',
 		format:    'iife',
 	},
+	acorn: {
+		ecmaVersion: 'latest',
+	},
 	plugins: [
 		copy({
 			targets: [

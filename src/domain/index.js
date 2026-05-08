@@ -2,9 +2,6 @@
 import { Sudoku } from './Sudoku.js';
 import { Game } from './Game.js';
 
-// 直接导出类供其他模块使用
-export { Sudoku, Game };
-
 // 作业要求的4个标准工厂函数
 export function createSudoku(input) {
   return new Sudoku(input);

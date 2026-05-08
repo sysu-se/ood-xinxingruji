@@ -3,7 +3,6 @@
 	import { cursor } from '@sudoku/stores/cursor';
 	import { notes } from '@sudoku/stores/notes';
 	import { candidates } from '@sudoku/stores/candidates';
-	import { gameInstance, makeGuess } from '../../stores/gameInstance.js';
 
 	// TODO: Improve keyboardDisabled
 	import { keyboardDisabled } from '@sudoku/stores/keyboard';
@@ -16,23 +15,13 @@
 				} else {
 					candidates.add($cursor, num);
 				}
-				// 解决缺点2：使用 makeGuess 而不是直接修改 userGrid
-				if ($gameInstance) {
-					makeGuess($cursor.y, $cursor.x, 0);
-				} else {
-					userGrid.set($cursor, 0);
-				}
+				userGrid.set($cursor, 0);
 			} else {
 				if ($candidates.hasOwnProperty($cursor.x + ',' + $cursor.y)) {
 					candidates.clear($cursor);
 				}
 
-				// 解决缺点2：使用 makeGuess 而不是直接修改 userGrid
-				if ($gameInstance) {
-					makeGuess($cursor.y, $cursor.x, num);
-				} else {
-					userGrid.set($cursor, num);
-				}
+				userGrid.set($cursor, num);
 			}
 		}
 	}

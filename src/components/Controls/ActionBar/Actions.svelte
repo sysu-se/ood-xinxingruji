@@ -7,32 +7,89 @@
 	import { settings } from '@sudoku/stores/settings';
 	import { keyboardDisabled } from '@sudoku/stores/keyboard';
 	import { gamePaused } from '@sudoku/stores/game';
-	import { canUndoStore, canRedoStore, undo, redo } from '../../../stores/gameInstance.js';
+	import { modal } from '@sudoku/stores/modal';
+	import { clearExploreFailure, exploreActive, exploreFailure } from '@sudoku/stores/explore';
+	import { undoGame, redoGame, canUndoGame, canRedoGame, startExplore, commitExplore, cancelExplore, backtrackExplore } from '@sudoku/game';
 
 	$: hintsAvailable = $hints > 0;
+	let showingExploreFailure = false;
+
+	$: if ($exploreFailure && !showingExploreFailure) {
+		showingExploreFailure = true;
+		const reasonText = $exploreFailure.reason === 'repeat'
+			? 'This board matches a previously failed exploration path.'
+			: 'This move creates a conflict in the board.';
+		modal.show('confirm', {
+			title: 'Explore failed',
+			text: reasonText,
+			button: 'OK',
+			onHide: () => {
+				clearExploreFailure();
+				showingExploreFailure = false;
+			}
+		});
+	}
 
 	function handleHint() {
-		if (hintsAvailable) {
-			if ($candidates.hasOwnProperty($cursor.x + ',' + $cursor.y)) {
-				candidates.clear($cursor);
-			}
+		if (!hintsAvailable) return;
+		if ($userGrid[$cursor.y][$cursor.x] !== 0) return;
 
-			userGrid.applyHint($cursor);
+		if ($notes) {
+			const candidateHint = userGrid.getCandidateHint($cursor);
+			if (candidateHint && candidateHint.length > 0) {
+				candidates.setCandidates($cursor, candidateHint);
+			} else {
+				modal.show('confirm', {
+					title: 'No candidates',
+					text: 'No valid candidates are available for this cell.',
+					button: 'OK'
+				});
+			}
+			return;
 		}
+
+		if ($candidates.hasOwnProperty($cursor.x + ',' + $cursor.y)) {
+			candidates.clear($cursor);
+		}
+
+		const hint = userGrid.applyNextHint();
+		if (hint) {
+			cursor.set(hint.col, hint.row);
+		} else {
+			modal.show('confirm', {
+				title: 'No next step',
+				text: 'No single-candidate move is available right now.',
+				button: 'OK'
+			});
+		}
+	}
+
+	function handleExploreStart() {
+		startExplore();
+	}
+
+	function handleExploreCommit() {
+		commitExplore();
+	}
+
+	function handleExploreCancel() {
+		cancelExplore();
+	}
+
+	function handleExploreBacktrack() {
+		backtrackExplore();
 	}
 </script>
 
 <div class="action-buttons space-x-3">
 
-	<!-- 解决缺点3：绑定 undo 事件和 canUndo 状态 -->
-	<button class="btn btn-round" disabled={$gamePaused || !$canUndoStore} on:click={undo} title="Undo">
+	<button class="btn btn-round" disabled={$gamePaused || !canUndoGame()} on:click={undoGame} title="Undo">
 		<svg class="icon-outline" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
 			<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
 		</svg>
 	</button>
 
-	<!-- 解决缺点3：绑定 redo 事件和 canRedo 状态 -->
-	<button class="btn btn-round" disabled={$gamePaused || !$canRedoStore} on:click={redo} title="Redo">
+	<button class="btn btn-round" disabled={$gamePaused || !canRedoGame()} on:click={redoGame} title="Redo">
 		<svg class="icon-outline" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
 			<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 10h-10a8 8 90 00-8 8v2M21 10l-6 6m6-6l-6-6" />
 		</svg>
@@ -55,6 +112,22 @@
 
 		<span class="badge tracking-tighter" class:badge-primary={$notes}>{$notes ? 'ON' : 'OFF'}</span>
 	</button>
+
+	{#if $exploreActive}
+		<button class="btn btn-small" disabled={$gamePaused} on:click={handleExploreBacktrack} title="Backtrack Explore">
+			Backtrack
+		</button>
+		<button class="btn btn-small btn-primary" disabled={$gamePaused} on:click={handleExploreCommit} title="Commit Explore">
+			Commit
+		</button>
+		<button class="btn btn-small" disabled={$gamePaused} on:click={handleExploreCancel} title="Cancel Explore">
+			Cancel
+		</button>
+	{:else}
+		<button class="btn btn-small" disabled={$gamePaused} on:click={handleExploreStart} title="Start Explore Mode">
+			Explore
+		</button>
+	{/if}
 
 </div>
 
